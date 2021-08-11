@@ -10,6 +10,7 @@
   },
   "play_wav_cmdline": "aplay %1",
   "play_mp3_cmdline": "mpg123 %1",
+  "play_ogg_cmdline": "ogg123 %1",
   "location": {
     "city": {
       "code": "Lawrence",
@@ -35,8 +36,7 @@
     }
   },
   "skills": {
-    "directory": "~/.mycroft/skills",
-    "stop_threshold": 2.0
+    "directory": "~/.local/share/mycroft/skills"
   },
   "server": {
     "url": "https://api.mycroft.ai",

@@ -1,35 +1,97 @@
-# Copyright 2016 Mycroft AI, Inc.
+# Copyright 2017 Mycroft AI Inc.
 #
-# This file is part of Mycroft Core.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# Mycroft Core is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+#    http://www.apache.org/licenses/LICENSE-2.0
 #
-# Mycroft Core is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
-# You should have received a copy of the GNU General Public License
-# along with Mycroft Core.  If not, see <http://www.gnu.org/licenses/>.
-
-
 from gtts import gTTS
+from gtts.lang import tts_langs
 
-from mycroft.tts import TTS, TTSValidator
+from .tts import TTS, TTSValidator
 
-__author__ = 'jdorleans'
+from mycroft.util.log import LOG
+
+# Live list of languages
+# Cached list of supported languages (2021-02-09)
+_default_langs = {'af': 'Afrikaans', 'sq': 'Albanian', 'ar': 'Arabic',
+                  'hy': 'Armenian', 'bn': 'Bengali', 'bs': 'Bosnian',
+                  'ca': 'Catalan', 'hr': 'Croatian', 'cs': 'Czech',
+                  'da': 'Danish', 'nl': 'Dutch', 'en': 'English',
+                  'eo': 'Esperanto', 'et': 'Estonian', 'tl': 'Filipino',
+                  'fi': 'Finnish', 'fr': 'French', 'de': 'German',
+                  'el': 'Greek', 'gu': 'Gujarati', 'hi': 'Hindi',
+                  'hu': 'Hungarian', 'is': 'Icelandic', 'id': 'Indonesian',
+                  'it': 'Italian', 'ja': 'Japanese', 'jw': 'Javanese',
+                  'kn': 'Kannada', 'km': 'Khmer', 'ko': 'Korean',
+                  'la': 'Latin', 'lv': 'Latvian', 'mk': 'Macedonian',
+                  'ml': 'Malayalam', 'mr': 'Marathi',
+                  'my': 'Myanmar (Burmese)', 'ne': 'Nepali',
+                  'no': 'Norwegian', 'pl': 'Polish', 'pt': 'Portuguese',
+                  'ro': 'Romanian', 'ru': 'Russian', 'sr': 'Serbian',
+                  'si': 'Sinhala', 'sk': 'Slovak', 'es': 'Spanish',
+                  'su': 'Sundanese', 'sw': 'Swahili', 'sv': 'Swedish',
+                  'ta': 'Tamil', 'te': 'Telugu', 'th': 'Thai', 'tr': 'Turkish',
+                  'uk': 'Ukrainian', 'ur': 'Urdu', 'vi': 'Vietnamese',
+                  'cy': 'Welsh', 'zh': 'Chinese (Mandarin/China)'
+                  }
+
+
+_supported_langs = None
+
+
+def get_supported_langs():
+    """Get dict of supported languages.
+
+    Tries to fetch remote list, if that fails a local cache will be used.
+
+    Returns:
+        (dict): Lang code to lang name map.
+    """
+    global _supported_langs
+    if not _supported_langs:
+        try:
+            _supported_langs = tts_langs()
+        except Exception:
+            LOG.warning('Couldn\'t fetch upto date language codes')
+    return _supported_langs or _default_langs
 
 
 class GoogleTTS(TTS):
-    def __init__(self, lang, voice):
-        super(GoogleTTS, self).__init__(lang, voice, GoogleTTSValidator(self))
-        self.type = 'mp3'
+    """Interface to google TTS."""
+    def __init__(self, lang, config):
+        self._google_lang = None
+        super(GoogleTTS, self).__init__(lang, config, GoogleTTSValidator(
+            self), 'mp3')
+
+    @property
+    def google_lang(self):
+        """Property containing a converted language code suitable for gTTS."""
+        supported_langs = get_supported_langs()
+        if not self._google_lang:
+            if self.lang.lower() in supported_langs:
+                self._google_lang = self.lang.lower()
+            elif self.lang[:2].lower() in supported_langs:
+                self._google_lang = self.lang[:2]
+        return self._google_lang or self.lang.lower()
 
     def get_tts(self, sentence, wav_file):
-        tts = gTTS(sentence, self.lang)
+        """Fetch tts audio using gTTS.
+
+        Args:
+            sentence (str): Sentence to generate audio for
+            wav_file (str): output file path
+        Returns:
+            Tuple ((str) written file, None)
+        """
+        tts = gTTS(text=sentence, lang=self.google_lang)
         tts.save(wav_file)
         return (wav_file, None)  # No phonemes
 
@@ -39,13 +101,14 @@ class GoogleTTSValidator(TTSValidator):
         super(GoogleTTSValidator, self).__init__(tts)
 
     def validate_lang(self):
-        # TODO
-        pass
+        lang = self.tts.google_lang
+        if lang.lower() not in get_supported_langs():
+            raise ValueError("Language not supported by gTTS: {}".format(lang))
 
     def validate_connection(self):
         try:
             gTTS(text='Hi').save(self.tts.filename)
-        except:
+        except Exception:
             raise Exception(
                 'GoogleTTS server could not be verified. Please check your '
                 'internet connection.')

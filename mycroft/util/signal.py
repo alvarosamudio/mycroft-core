@@ -1,11 +1,25 @@
+# Copyright 2017 Mycroft AI Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+import tempfile
+import time
+
 import os
 import os.path
-import tempfile
-import mycroft
-import time
-from mycroft.util.log import getLogger
 
-LOG = getLogger(__name__)
+import mycroft
+from .file_utils import ensure_directory_exists, create_file
 
 
 def get_ipc_directory(domain=None):
@@ -21,53 +35,12 @@ def get_ipc_directory(domain=None):
     Returns:
         str: a path to the IPC directory
     """
-    config = mycroft.configuration.ConfigurationManager.instance()
+    config = mycroft.configuration.Configuration.get()
     dir = config.get("ipc_path")
     if not dir:
         # If not defined, use /tmp/mycroft/ipc
         dir = os.path.join(tempfile.gettempdir(), "mycroft", "ipc")
     return ensure_directory_exists(dir, domain)
-
-
-def ensure_directory_exists(dir, domain=None):
-    """ Create a directory and give access rights to all
-
-    Args:
-        domain (str): The IPC domain.  Basically a subdirectory to prevent
-            overlapping signal filenames.
-
-    Returns:
-        str: a path to the directory
-    """
-    if domain:
-        dir = os.path.join(dir, domain)
-    dir = os.path.normpath(dir)
-
-    if not os.path.isdir(dir):
-        try:
-            save = os.umask(0)
-            os.makedirs(dir, 0777)  # give everyone rights to r/w here
-        except OSError:
-            LOG.warn("Failed to create: " + dir)
-            pass
-        finally:
-            os.umask(save)
-
-    return dir
-
-
-def create_file(filename):
-    """ Create the file filename and create any directories needed
-
-        Args:
-            filename: Path to the file to be created
-    """
-    try:
-        os.makedirs(os.path.dirname(filename))
-    except OSError:
-        pass
-    with open(filename, 'w') as f:
-        f.write('')
 
 
 def create_signal(signal_name):

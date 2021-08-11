@@ -1,23 +1,37 @@
-from mycroft.messagebus.message import Message
-from mycroft.util.log import getLogger
-from mycroft.audio.services import AudioBackend
-from os.path import dirname, abspath, basename
-import sys
+# Copyright 2017 Mycroft AI Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 import time
 from mimetypes import guess_type
 
 import pychromecast
 
-logger = getLogger(abspath(__file__).split('/')[-2])
-__author__ = 'forslund'
+from mycroft.audio.services import RemoteAudioBackend
+from mycroft.messagebus.message import Message
+from mycroft.util.log import LOG
 
 
-class ChromecastService(AudioBackend):
+class ChromecastService(RemoteAudioBackend):
+    """
+        Audio backend for playback on chromecast. Using the default media
+        playback controller included in pychromecast.
+    """
     def _connect(self, message):
-        logger.info('Trying to connect to chromecast')
+        LOG.info('Trying to connect to chromecast')
         casts = pychromecast.get_chromecasts()
         if self.config is None or 'identifier' not in self.config:
-            logger.error("Chromecast identifier not found!")
+            LOG.error("Chromecast identifier not found!")
             return  # Can't connect since no id is specified
         else:
             identifier = self.config['identifier']
@@ -26,17 +40,16 @@ class ChromecastService(AudioBackend):
                 self.cast = c
                 break
         else:
-            logger.info('Couldn\'t find chromecast ' + identifier)
+            LOG.info('Couldn\'t find chromecast ' + identifier)
             self.connection_attempts += 1
             time.sleep(10)
-            self.emitter.emit(Message('ChromecastServiceConnect'))
+            self.bus.emit(Message('ChromecastServiceConnect'))
             return
 
-        self.cast.quit_app()
-
-    def __init__(self, config, emitter, name='chromecast', cast=None):
+    def __init__(self, config, bus, name='chromecast', cast=None):
+        super(ChromecastService, self).__init__(config, bus)
         self.connection_attempts = 0
-        self.emitter = emitter
+        self.bus = bus
         self.config = config
         self.name = name
 
@@ -44,39 +57,63 @@ class ChromecastService(AudioBackend):
 
         if cast is not None:
             self.cast = cast
-            self.cast.quit_app()
         else:
             self.cast = None
-            self.emitter.on('ChromecastServiceConnect', self._connect)
-            self.emitter.emit(Message('ChromecastServiceConnect'))
+            self.bus.on('ChromecastServiceConnect', self._connect)
+            self.bus.emit(Message('ChromecastServiceConnect'))
 
     def supported_uris(self):
-        print "CHROMECAST FOUND: " + str(self.cast)
+        """ Return supported uris of chromecast. """
+        LOG.info("Chromecasts found: " + str(self.cast))
         if self.cast:
             return ['http', 'https']
         else:
             return []
 
     def clear_list(self):
+        """ Clear tracklist. """
         self.tracklist = []
-        pass
 
     def add_list(self, tracks):
+        """
+            Add list of tracks to chromecast playlist.
+
+            Args:
+                tracks (list): list media to add to playlist.
+        """
         self.tracklist = tracks
         pass
 
-    def play(self):
+    def play(self, repeat=False):
+        """ Start playback.
+
+        TODO: add playlist support and repeat
+        """
+        self.cast.wait()  # Make sure the device is ready to receive command
+        self.cast.quit_app()
+        while self.cast.status.status_text != '':
+            time.sleep(1)
+
         track = self.tracklist[0]
-        print track, guess_type(track)
+        # Report start of playback to audioservice
+        if self._track_start_callback:
+            self._track_start_callback(track)
+        LOG.debug('track: {}, type: {}'.format(track, guess_type(track)[0]))
         mime = guess_type(track)[0] or 'audio/mp3'
-        print mime
+        self.cast.wait()  # Make sure the device is ready to receive command
         self.cast.play_media(track, mime)
 
     def stop(self):
-        self.cast.media_controller.stop()
-        self.cast.quit_app()
+        """ Stop playback and quit app. """
+        if self.cast.media_controller.is_playing:
+            self.cast.media_controller.stop()
+            self.cast.quit_app()
+            return True
+        else:
+            return False
 
     def pause(self):
+        """ Pause current playback. """
         if not self.cast.media_controller.is_paused:
             self.cast.media_controller.pause()
 
@@ -85,9 +122,11 @@ class ChromecastService(AudioBackend):
             self.cast.media_controller.play()
 
     def next(self):
+        """ Skip current track. (Not implemented) """
         pass
 
     def previous(self):
+        """ Return to previous track. (Not implemented) """
         pass
 
     def lower_volume(self):
@@ -99,6 +138,7 @@ class ChromecastService(AudioBackend):
         pass
 
     def track_info(self):
+        """ Return info about currently playing track. """
         info = {}
         ret = {}
         ret['name'] = info.get('name', '')
@@ -110,15 +150,19 @@ class ChromecastService(AudioBackend):
             ret['album'] = ''
         return ret
 
+    def shutdown(self):
+        """ Disconnect from the device. """
+        self.cast.disconnect()
 
-def autodetect(config, emitter):
+
+def autodetect(config, bus):
     """
         Autodetect chromecasts on the network and create backends for each
     """
-    casts = pychromecast.get_chromecasts()
+    casts = pychromecast.get_chromecasts(timeout=5, tries=2, retry_wait=2)
     ret = []
     for c in casts:
-        logger.info(c.name + " found.")
-        ret.append(ChromecastService(config, emitter, c.name.lower(), c))
+        LOG.info(c.name + " found.")
+        ret.append(ChromecastService(config, bus, c.name.lower(), c))
 
     return ret

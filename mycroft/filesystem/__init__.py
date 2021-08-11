@@ -1,60 +1,78 @@
-# Copyright 2016 Mycroft AI, Inc.
+# Copyright 2017 Mycroft AI Inc.
 #
-# This file is part of Mycroft Core.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# Mycroft Core is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+#    http://www.apache.org/licenses/LICENSE-2.0
 #
-# Mycroft Core is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
-# You should have received a copy of the GNU General Public License
-# along with Mycroft Core.  If not, see <http://www.gnu.org/licenses/>.
-
-
 import os
+import shutil
 from os.path import join, expanduser, isdir
+import xdg.BaseDirectory
 
-__author__ = 'jdorleans'
 
+class FileSystemAccess:
+    """A class for providing access to the mycroft FS sandbox.
 
-class FileSystemAccess(object):
+    Intended to be attached to skills at initialization time to provide a
+    skill-specific namespace.
     """
-    A class for providing access to the mycroft FS sandbox. Intended to be
-    attached to skills
-    at initialization time to provide a skill-specific namespace.
-    """
+
     def __init__(self, path):
+        #: Member value containing the root path of the namespace
         self.path = self.__init_path(path)
 
     @staticmethod
     def __init_path(path):
         if not isinstance(path, str) or len(path) == 0:
             raise ValueError("path must be initialized as a non empty string")
-        path = join(expanduser('~'), '.mycroft', path)
+
+        old_path = join(expanduser('~'), '.mycroft', path)
+        path = join(xdg.BaseDirectory.save_config_path('mycroft'), path)
+
+        # Migrate from the old location if it still exists
+        # TODO: remove in 22.02
+        if isdir(old_path):
+            if isdir(path):
+                shutil.rmtree(path)
+            shutil.move(old_path, path)
 
         if not isdir(path):
             os.makedirs(path)
         return path
 
     def open(self, filename, mode):
-        """
+        """Open a file in the provided namespace.
+
         Get a handle to a file (with the provided mode) within the
         skill-specific namespace.
 
-        :param filename: a str representing a path relative to the namespace.
-            subdirs not currently supported.
+        Parameters:
+            filename (str): a path relative to the namespace.
+                      subdirs not currently supported.
 
-        :param mode: a file handle mode
+            mode (str): a file handle mode
 
-        :return: an open file handle.
+        Returns:
+            an open file handle.
         """
         file_path = join(self.path, filename)
         return open(file_path, mode)
 
     def exists(self, filename):
+        """Check if file exists in the namespace.
+
+        Args:
+            filename (str): a path relative to the namespace.
+                      subdirs not currently supported.
+        Returns:
+            bool: True if file exists, else False.
+        """
         return os.path.exists(join(self.path, filename))

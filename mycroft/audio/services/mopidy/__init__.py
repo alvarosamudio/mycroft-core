@@ -1,18 +1,32 @@
-from mycroft.messagebus.message import Message
-from mycroft.util.log import getLogger
-from mycroft.audio.services import AudioBackend
-from os.path import dirname, abspath, basename
+# Copyright 2017 Mycroft AI Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 import sys
 import time
 
-logger = getLogger(abspath(__file__).split('/')[-2])
-__author__ = 'forslund'
+from os.path import dirname, abspath
+
+from mycroft.audio.services import RemoteAudioBackend
+from mycroft.messagebus.message import Message
+from mycroft.util.log import LOG
+
 
 sys.path.append(abspath(dirname(__file__)))
 Mopidy = __import__('mopidypost').Mopidy
 
 
-class MopidyService(AudioBackend):
+class MopidyService(RemoteAudioBackend):
     def _connect(self, message):
         """
             Callback method to connect to mopidy if server is not available
@@ -23,25 +37,25 @@ class MopidyService(AudioBackend):
             url = self.config.get('url', url)
         try:
             self.mopidy = Mopidy(url)
-        except:
+        except Exception:
             if self.connection_attempts < 1:
-                logger.debug('Could not connect to server, will retry quietly')
+                LOG.debug('Could not connect to server, will retry quietly')
             self.connection_attempts += 1
             time.sleep(10)
-            self.emitter.emit(Message('MopidyServiceConnect'))
+            self.bus.emit(Message('MopidyServiceConnect'))
             return
 
-        logger.info('Connected to mopidy server')
+        LOG.info('Connected to mopidy server')
 
-    def __init__(self, config, emitter, name='mopidy'):
+    def __init__(self, config, bus, name='mopidy'):
         self.connection_attempts = 0
-        self.emitter = emitter
+        self.bus = bus
         self.config = config
         self.name = name
 
         self.mopidy = None
-        self.emitter.on('MopidyServiceConnect', self._connect)
-        self.emitter.emit(Message('MopidyServiceConnect'))
+        self.bus.on('MopidyServiceConnect', self._connect)
+        self.bus.emit(Message('MopidyServiceConnect'))
 
     def supported_uris(self):
         """
@@ -60,12 +74,20 @@ class MopidyService(AudioBackend):
     def add_list(self, tracks):
         self.mopidy.add_list(tracks)
 
-    def play(self):
+    def play(self, repeat=False):
+        """ Start playback.
+
+        TODO: Add repeat support.
+        """
         self.mopidy.play()
 
     def stop(self):
-        self.mopidy.clear_list()
-        self.mopidy.stop()
+        if self.mopidy.is_playing():
+            self.mopidy.clear_list()
+            self.mopidy.stop()
+            return True
+        else:
+            return False
 
     def pause(self):
         self.mopidy.pause()
@@ -98,9 +120,10 @@ class MopidyService(AudioBackend):
         return ret
 
 
-def load_service(base_config, emitter):
+def load_service(base_config, bus):
     backends = base_config.get('backends', [])
     services = [(b, backends[b]) for b in backends
-                if backends[b]['type'] == 'mopidy']
-    instances = [MopidyService(s[1], emitter, s[0]) for s in services]
+                if backends[b]['type'] == 'mopidy' and
+                backends[b].get('active', True)]
+    instances = [MopidyService(s[1], bus, s[0]) for s in services]
     return instances

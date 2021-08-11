@@ -1,42 +1,104 @@
-# Copyright 2016 Mycroft AI, Inc.
+# Copyright 2017 Mycroft AI Inc.
 #
-# This file is part of Mycroft Core.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# Mycroft Core is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+#    http://www.apache.org/licenses/LICENSE-2.0
 #
-# Mycroft Core is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
-# You should have received a copy of the GNU General Public License
-# along with Mycroft Core.  If not, see <http://www.gnu.org/licenses/>.
-
-
 import json
+from queue import Queue, Empty
 import threading
 import time
 
 import requests
 
-from mycroft.configuration import ConfigurationManager
+from mycroft.api import DeviceApi, is_paired
+from mycroft.configuration import Configuration
 from mycroft.session import SessionManager
-from mycroft.util.log import getLogger
-from mycroft.util.setup_base import get_version
-
-LOG = getLogger("Metrics")
-
-config = ConfigurationManager.get().get('server')
+from mycroft.util.log import LOG
+from mycroft.version import CORE_VERSION_STR
+from copy import copy
 
 
-class Stopwatch(object):
+class _MetricSender(threading.Thread):
+    """Thread responsible for sending metrics data."""
+    def __init__(self):
+        super().__init__()
+        self.queue = Queue()
+        self.daemon = True
+        self.start()
+
+    def run(self):
+        while True:
+            time.sleep(30)
+
+            try:
+                while True:  # Try read the queue until it fails
+                    report_metric(*self.queue.get_nowait())
+                    time.sleep(0.5)
+            except Empty:
+                pass  # If the queue is empty just continue the loop
+            except Exception as e:
+                LOG.error('Could not send Metrics: {}'.format(repr(e)))
+
+
+_metric_uploader = _MetricSender()
+
+
+def report_metric(name, data):
+    """
+    Report a general metric to the Mycroft servers
+
+    Args:
+        name (str): Name of metric. Must use only letters and hyphens
+        data (dict): JSON dictionary to report. Must be valid JSON
+    """
+    try:
+        if is_paired() and Configuration().get()['opt_in']:
+            DeviceApi().report_metric(name, data)
+    except requests.RequestException as e:
+        LOG.error('Metric couldn\'t be uploaded, due to a network error ({})'
+                  .format(e))
+
+
+def report_timing(ident, system, timing, additional_data=None):
+    """Create standardized message for reporting timing.
+
+    Args:
+        ident (str):            identifier of user interaction
+        system (str):           system the that's generated the report
+        timing (stopwatch):     Stopwatch object with recorded timing
+        additional_data (dict): dictionary with related data
+    """
+    additional_data = additional_data or {}
+    report = copy(additional_data)
+    report['id'] = ident
+    report['system'] = system
+    report['start_time'] = timing.timestamp
+    report['time'] = timing.time
+
+    _metric_uploader.queue.put(('timing', report))
+
+
+class Stopwatch:
+    """
+        Simple time measuring class.
+    """
     def __init__(self):
         self.timestamp = None
+        self.time = None
 
     def start(self):
+        """
+            Start a time measurement
+        """
         self.timestamp = time.time()
 
     def lap(self):
@@ -46,13 +108,35 @@ class Stopwatch(object):
         return cur_time - start_time
 
     def stop(self):
+        """
+            Stop a running time measurement. returns the measured time
+        """
         cur_time = time.time()
         start_time = self.timestamp
-        self.timestamp = None
-        return cur_time - start_time
+        self.time = cur_time - start_time
+        return self.time
+
+    def __enter__(self):
+        """
+            Start stopwatch when entering with-block.
+        """
+        self.start()
+
+    def __exit__(self, tpe, value, tb):
+        """
+            Stop stopwatch when exiting with-block.
+        """
+        self.stop()
+
+    def __str__(self):
+        cur_time = time.time()
+        if self.timestamp:
+            return str(self.time or cur_time - self.timestamp)
+        else:
+            return 'Not started'
 
 
-class MetricsAggregator(object):
+class MetricsAggregator:
     """
     MetricsAggregator is not threadsafe, and multiple clients writing the
     same metric "concurrently" may result in data loss.
@@ -63,7 +147,7 @@ class MetricsAggregator(object):
         self._timers = {}
         self._levels = {}
         self._attributes = {}
-        self.attr("version", get_version())
+        self.attr("version", CORE_VERSION_STR)
 
     def increment(self, name, value=1):
         cur = self._counters.get(name, 0)
@@ -84,7 +168,7 @@ class MetricsAggregator(object):
         self._timers = {}
         self._levels = {}
         self._attributes = {}
-        self.attr("version", get_version())
+        self.attr("version", CORE_VERSION_STR)
 
     def attr(self, name, value):
         self._attributes[name] = value
@@ -101,7 +185,7 @@ class MetricsAggregator(object):
         count = (len(payload['counters']) + len(payload['timers']) +
                  len(payload['levels']))
         if count > 0:
-            LOG.debug(json.dumps(payload))
+            # LOG.debug(json.dumps(payload))
 
             def publish():
                 publisher.publish(payload)
@@ -109,10 +193,11 @@ class MetricsAggregator(object):
             threading.Thread(target=publish).start()
 
 
-class MetricsPublisher(object):
-    def __init__(self, url=config.get("url"), enabled=config.get("metrics")):
-        self.url = url
-        self.enabled = enabled
+class MetricsPublisher:
+    def __init__(self, url=None, enabled=False):
+        conf = Configuration().get()['server']
+        self.url = url or conf['url']
+        self.enabled = enabled or conf['metrics']
 
     def publish(self, events):
         if 'session_id' not in events:
