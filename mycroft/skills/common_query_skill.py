@@ -11,13 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import time
-
 from enum import IntEnum
 from abc import ABC, abstractmethod
 from .mycroft_skill import MycroftSkill
 
-from mycroft.configuration import Configuration
 from mycroft.util.file_utils import resolve_resource_file
 
 
@@ -68,11 +65,15 @@ class CommonQuerySkill(MycroftSkill, ABC):
         noise_words_filename = resolve_resource_file(noise_words_filepath)
         self.translated_noise_words = []
         try:
-            with open(noise_words_filename) as f:
-                self.translated_noise_words = f.read().strip()
-            self.translated_noise_words = self.translated_noise_words.split()
+            if noise_words_filename:
+                with open(noise_words_filename) as f:
+                    read_noise_words = f.read().strip()
+                self.translated_noise_words = read_noise_words.split()
+            else:
+                raise FileNotFoundError
         except FileNotFoundError:
-            self.log.warning("Missing noise_words.list file in res/text/lang")
+            self.log.warning("Missing noise_words.list file in "
+                             f"res/text/{self.lang}")
 
         # these should probably be configurable
         self.level_confidence = {
